@@ -55,7 +55,7 @@ setup_partitions() {
 
   # Create filesystems
   mkfs.fat -F32 -n "BOOT" ${DISK}1
-  mkswap -f ${DISK}3
+  mkswap -f ${DISK}2
   mkfs.ext4 -F -L "ROOT" ${DISK}3
 
   # Mount
@@ -76,10 +76,15 @@ setup_partitions() {
 
 # Setup systemdboot as the bootloader
 setup_bootloader() {
-  bootctl install
+  # Run bootctl inside chroot
+  arch-chroot /mnt bootctl install
+  if [ $? -ne 0 ]; then
+    echo "Error: Failed to install systemd-boot."
+    exit 3
+  fi
 
-  BOOTLOADER_ENTRY="/boot/loader/entries/arch.conf"
-  ARCH_ENTRY_TEMPLATE="/usr/share/systemd/bootctl/arch.conf"
+  BOOTLOADER_ENTRY="/mnt/boot/loader/entries/arch.conf"
+  ARCH_ENTRY_TEMPLATE="/mnt/usr/share/systemd/bootctl/arch.conf"
 
   # Get PARTUUID for the root partition
   PARTUUID=$(blkid | grep "${DISK}3" | awk -F= '{print $NF}' | tr -d '\"')
@@ -103,45 +108,29 @@ setup_bootloader() {
 }
 
 # Main execution flow
-case $1 in
-"install" | "")
-  # Ask for the drive to install on
-  get_drive
 
-  # Partition, create filesystems and mount
-  setup_partitions
+# Ask for the drive to install on
+get_drive
 
-  # Then install the kernel and some required packages
-  pacstrap -K /mnt base linux linux-firmware networkmanager
+# Partition, create filesystems and mount
+setup_partitions
 
-  genfstab -U /mnt >>/mnt/etc/fstab
+# Then install the kernel and some required packages
+pacstrap -K /mnt base linux linux-firmware networkmanager
 
-  # Copy the script to the new environment for the chroot part
-  cp ./install.sh /mnt/tmp/
-  echo "DISK=${DISK}" >/mnt/etc/install-script-variables.conf
+genfstab -U /mnt >>/mnt/etc/fstab
 
-  arch-chroot /mnt /bin/bash -c "/tmp/install.sh chroot"
+# Setup base locales
+ln -sf /usr/share/zoneinfo/Europe/Paris /mnt/etc/localtime
+arch-chroot /mnt locale-gen
+echo LANG=en_US.UTF-8 >/mnt/etc/locale.conf
+echo hostname >/mnt/etc/hostname
 
-  umount -A -R /mnt # Unmount everything for safety
-  printf "\n==> Installation finished, you can now reboot.\n"
-  ;;
+arch-chroot /mnt bash -c "echo 'root:password' | chpasswd"
 
-"chroot")
-  echo "Running the chroot side"
+# NetworkManager handles all the network setup
+arch-chroot /mnt systemctl enable NetworkManager
 
-  . /tmp/install-script-variables.conf
-
-  # Setup base locales
-  ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime
-  locale-gen
-  echo LANG=en_US.UTF-8 >/etc/locale.conf
-  echo hostname >/etc/hostname
-
-  echo "root:password" | chpasswd
-
-  systemctl enable NetworkManager
-
-  setup_bootloader
-
-  ;;
-esac
+setup_bootloader
+umount -A -R /mnt # Unmount everything for safety
+printf "\n\n\n==> Installation finished, you can now reboot.\n"
