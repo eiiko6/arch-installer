@@ -1,5 +1,68 @@
 #!/bin/sh
 
+# User inputs
+HOSTNAME=""
+ROOT_PASSWORD=""
+USERNAME=""
+USER_PASSWORD=""
+
+get_config_inputs() {
+  while [ -z "$HOSTNAME" ]; do
+    printf "Enter hostname: "
+    read HOSTNAME
+
+    if [ -z "$HOSTNAME" ]; then
+      echo "Hostname cannot be empty."
+      continue
+    fi
+    break
+  done
+  echo ""
+
+  while [ -z "$ROOT_PASSWORD" ]; do
+    printf "Enter root password: "
+    read -s ROOT_PASSWORD
+    printf "\nConfirm root password: "
+    read -s CONFIRM_ROOT_PASSWORD
+
+    if [ "$ROOT_PASSWORD" != "$CONFIRM_ROOT_PASSWORD" ]; then
+      echo "Root passwords do not match."
+      ROOT_PASSWORD=""
+      CONFIRM_ROOT_PASSWORD=""
+      continue
+    fi
+    break
+  done
+  echo ""
+
+  while [ -z "$USERNAME" ]; do
+    printf "Enter username: "
+    read USERNAME
+
+    if [ -z "$USERNAME" ]; then
+      echo "Username cannot be empty."
+      continue
+    fi
+    break
+  done
+  echo ""
+
+  while [ -z "$USER_PASSWORD" ]; do
+    printf "Enter user password: "
+    read -s USER_PASSWORD
+    printf "\nConfirm user password: "
+    read -s CONFIRM_USER_PASSWORD
+
+    if [ "$USER_PASSWORD" != "$CONFIRM_USER_PASSWORD" ]; then
+      echo "User passwords do not match."
+      USER_PASSWORD=""
+      CONFIRM_USER_PASSWORD=""
+      continue
+    fi
+    break
+  done
+}
+
 # Function to get drive name
 DISK=""
 get_drive() {
@@ -14,8 +77,8 @@ get_drive() {
   DISK="/dev/${DISK}"
 
   printf "WARNING: All data on %s will be erased. Are you sure? [Y/n] " "${DISK}"
-  read confirmation
-  case "$confirmation" in
+  read CONFIRMATION
+  case "$CONFIRMATION" in
   "n" | "N")
     echo "Operation canceled."
     exit 0
@@ -39,18 +102,18 @@ get_drive() {
 }
 
 setup_partitions() {
-  if [ ! -d "/sys/firmware/efi" ]; then # Checking for bios system
+  if [ ! -d "/sys/firmware/efi" ]; then # Checking for BIOS system
     echo "BIOS systems are not supported."
   fi
 
   umount -A -R /mnt         # make sure everything is unmounted before we start
   sgdisk -Z ${DISK}         # zap all on disk
-  sgdisk -a 2048 -o ${DISK} # new gpt disk 2048 alignment
+  sgdisk -a 2048 -o ${DISK} # new GPT disk 2048 alignment
 
   # Create partitions
   sgdisk -n 1::+1G --typecode=1:ef00 --change-name=1:"BOOT" ${DISK} # partition 1 (UEFI boot partition)
-  sgdisk -n 2::+4G --typecode=2:8200 --change-name=1:"SWAP" ${DISK} # partition 2 (Swap partition)
-  sgdisk -n 3::-0 --typecode=3:8300 --change-name=1:"ROOT" ${DISK}  # partition 3 (Root), default start, remaining
+  sgdisk -n 2::+4G --typecode=2:8200 --change-name=2:"SWAP" ${DISK} # partition 2 (Swap partition)
+  sgdisk -n 3::-0 --typecode=3:8300 --change-name=3:"ROOT" ${DISK}  # partition 3 (Root), default start, remaining
   partprobe ${DISK}                                                 # reread partition table to ensure it is correct
 
   # Create filesystems
@@ -109,14 +172,19 @@ setup_bootloader() {
 
 # Main execution flow
 
+# Ask for hostname, username, user and root passwords
+get_config_inputs
+echo ""
+
 # Ask for the drive to install on
 get_drive
+echo ""
 
 # Partition, create filesystems and mount
 setup_partitions
 
 # Then install the kernel and some required packages
-pacstrap -K /mnt base linux linux-firmware networkmanager
+pacstrap -K /mnt base linux linux-firmware networkmanager sudo
 
 genfstab -U /mnt >>/mnt/etc/fstab
 
@@ -124,11 +192,20 @@ genfstab -U /mnt >>/mnt/etc/fstab
 ln -sf /usr/share/zoneinfo/Europe/Paris /mnt/etc/localtime
 arch-chroot /mnt locale-gen
 echo LANG=en_US.UTF-8 >/mnt/etc/locale.conf
-echo hostname >/mnt/etc/hostname
+echo $HOSTNAME >/mnt/etc/hostname
 
-arch-chroot /mnt bash -c "echo 'root:password' | chpasswd"
+# Set root password
+arch-chroot /mnt bash -c "echo 'root:$ROOT_PASSWORD' | chpasswd"
 
-# NetworkManager handles all the network setup
+# Create user and set password
+arch-chroot /mnt useradd -m $USERNAME
+arch-chroot /mnt bash -c "echo '$USERNAME:$USER_PASSWORD' | chpasswd"
+
+# Setup wheel group
+arch-chroot /mnt usermod -aG wheel $USERNAME
+arch-chroot /mnt bash -c "echo '%wheel ALL=(ALL) ALL' | EDITOR='tee -a' visudo"
+
+# Enable NetworkManager
 arch-chroot /mnt systemctl enable NetworkManager
 
 setup_bootloader
