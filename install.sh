@@ -171,7 +171,7 @@ setup_bootloader() {
   fi
 }
 
-# Main execution flow
+# >------ Main execution flow ------<
 
 # Ask for hostname, username, user and root passwords
 get_config_inputs
@@ -185,13 +185,17 @@ echo ""
 setup_partitions
 
 # Then install the kernel and some required packages
-pacstrap -K /mnt base linux linux-firmware networkmanager sudo
+pacstrap -K /mnt base linux linux-firmware networkmanager lemurs sudo
+if [ $? -ne 0 ]; then
+  echo "Error: Failed to install base system."
+  exit 4
+fi
 
 genfstab -U /mnt >>/mnt/etc/fstab
 
 # Setup base locales
 ln -sf /usr/share/zoneinfo/Europe/Paris /mnt/etc/localtime
-echo 'en_US.UTF-8 UTF-8' >/mnt/etc/locale.gen
+echo 'en_US.UTF-8 UTF-8' >>/mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 echo LANG=en_US.UTF-8 >/mnt/etc/locale.conf
 echo $HOSTNAME >/mnt/etc/hostname
@@ -207,8 +211,8 @@ arch-chroot /mnt bash -c "echo '$USERNAME:$USER_PASSWORD' | chpasswd"
 arch-chroot /mnt usermod -aG wheel $USERNAME
 arch-chroot /mnt bash -c "echo '%wheel ALL=(ALL) ALL' | EDITOR='tee -a' visudo"
 
-# Enable NetworkManager
-arch-chroot /mnt systemctl enable NetworkManager
+# Setup services and display manager
+arch-chroot /mnt systemctl enable NetworkManager lemurs
 
 setup_bootloader
 umount -A -R /mnt # Unmount everything for safety
