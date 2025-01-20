@@ -34,6 +34,7 @@ get_config_inputs() {
     break
   done
   echo ""
+  echo ""
 
   while [ -z "$USERNAME" ]; do
     printf "Enter username: "
@@ -190,6 +191,7 @@ genfstab -U /mnt >>/mnt/etc/fstab
 
 # Setup base locales
 ln -sf /usr/share/zoneinfo/Europe/Paris /mnt/etc/localtime
+echo 'en_US.UTF-8 UTF-8' >/mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 echo LANG=en_US.UTF-8 >/mnt/etc/locale.conf
 echo $HOSTNAME >/mnt/etc/hostname
