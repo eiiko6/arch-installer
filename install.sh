@@ -6,7 +6,18 @@ ROOT_PASSWORD=""
 USERNAME=""
 USER_PASSWORD=""
 
+send_status_message() {
+  term_width=$(tput cols 2>/dev/null || echo 80)
+  msg="$1"
+  edge=$(printf '%*s' "$term_width" '' | tr ' ' '=')
+  printf "\n%s\n" "$edge"
+  printf "%*s\n" $(((${#msg} + term_width) / 2)) "$msg"
+  printf "%s\n\n" "$edge"
+}
+
 get_config_inputs() {
+  send_status_message "CONFIGURATION: Getting user inputs"
+
   while [ -z "$HOSTNAME" ]; do
     printf "Enter hostname: "
     read HOSTNAME
@@ -67,8 +78,10 @@ get_config_inputs() {
 # Function to get drive name
 DISK=""
 get_drive() {
+  send_status_message "DRIVE SETUP: Selecting and confirming target drive"
+
   lsblk
-  printf "\nEnter the drive name (e.g., sda, sdb, vda): "
+  printf "\nEnter the drive name (e.g., sda, sdb, vda, nvme0n1): "
   read DISK
   if [ -z "${DISK}" ]; then
     echo "No drive name entered. Exiting."
@@ -76,6 +89,11 @@ get_drive() {
   fi
 
   DISK="/dev/${DISK}"
+  PART_PREFIX="$DISK"
+  case "$DISK" in
+  *nvme*n*) PART_PREFIX="${DISK}p" ;; # nvme devices need a 'p' before partition number
+  *) PART_PREFIX="${DISK}" ;;
+  esac
 
   printf "WARNING: All data on %s will be erased. Are you sure? [Y/n] " "${DISK}"
   read CONFIRMATION
@@ -103,6 +121,8 @@ get_drive() {
 }
 
 setup_partitions() {
+  send_status_message "PARTITIONING: Creating partitions and filesystems"
+
   if [ ! -d "/sys/firmware/efi" ]; then # Checking for BIOS system
     echo "BIOS systems are not supported."
   fi
@@ -118,28 +138,30 @@ setup_partitions() {
   partprobe ${DISK}                                                 # reread partition table to ensure it is correct
 
   # Create filesystems
-  mkfs.fat -F32 -n "BOOT" ${DISK}1
-  mkswap -f ${DISK}2
-  mkfs.ext4 -F -L "ROOT" ${DISK}3
+  mkfs.fat -F32 -n "BOOT" ${PART_PREFIX}1
+  mkswap -f ${PART_PREFIX}2
+  mkfs.ext4 -F -L "ROOT" ${PART_PREFIX}3
 
   # Mount
-  mount ${DISK}3 /mnt
+  mount ${PART_PREFIX}3 /mnt
   if [ $? -ne 0 ]; then
     echo "Failed to mount the ROOT partition."
     exit 2 # Exit if mounting ROOT partition fails
   fi
 
-  mount --mkdir ${DISK}1 /mnt/boot
+  mount --mkdir ${PART_PREFIX}1 /mnt/boot
   if [ $? -ne 0 ]; then
     echo "Failed to mount the BOOT partition."
     exit 2 # Exit if mounting BOOT partition fails
   fi
 
-  swapon ${DISK}2
+  swapon ${PART_PREFIX}2
 }
 
 # Setup systemdboot as the bootloader
 setup_bootloader() {
+  send_status_message "BOOTLOADER: Installing and configuring systemd-boot"
+
   # Run bootctl inside chroot
   arch-chroot /mnt bootctl install
   if [ $? -ne 0 ]; then
@@ -151,7 +173,7 @@ setup_bootloader() {
   ARCH_ENTRY_TEMPLATE="/mnt/usr/share/systemd/bootctl/arch.conf"
 
   # Get PARTUUID for the root partition
-  PARTUUID=$(blkid | grep "${DISK}3" | awk -F= '{print $NF}' | tr -d '\"')
+  PARTUUID=$(blkid | grep "${PART_PREFIX}3" | awk -F= '{print $NF}' | tr -d '\"')
 
   if [ -z "$PARTUUID" ]; then
     echo "Error: Unable to find PARTUUID for ${DISK}3."
@@ -185,21 +207,25 @@ echo ""
 setup_partitions
 
 # Then install the kernel and some required packages
+send_status_message "BASE INSTALLATION: Installing base system with pacstrap"
 pacstrap -K /mnt base linux linux-firmware networkmanager lemurs sudo
 if [ $? -ne 0 ]; then
   echo "Error: Failed to install base system."
   exit 4
 fi
 
+send_status_message "SYSTEM CONFIG: Generating fstab"
 genfstab -U /mnt >>/mnt/etc/fstab
 
 # Setup base locales
+send_status_message "SYSTEM CONFIG: Setting timezone, locales, and hostname"
 ln -sf /usr/share/zoneinfo/Europe/Paris /mnt/etc/localtime
 echo 'en_US.UTF-8 UTF-8' >>/mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 echo LANG=en_US.UTF-8 >/mnt/etc/locale.conf
 echo $HOSTNAME >/mnt/etc/hostname
 
+send_status_message "USER SETUP: Creating user and setting passwords"
 # Set root password
 arch-chroot /mnt bash -c "echo 'root:$ROOT_PASSWORD' | chpasswd"
 
@@ -211,9 +237,13 @@ arch-chroot /mnt bash -c "echo '$USERNAME:$USER_PASSWORD' | chpasswd"
 arch-chroot /mnt usermod -aG wheel $USERNAME
 arch-chroot /mnt bash -c "echo '%wheel ALL=(ALL) ALL' | EDITOR='tee -a' visudo"
 
+send_status_message "SERVICES: Enabling NetworkManager and lemurs"
 # Setup services and display manager
 arch-chroot /mnt systemctl enable NetworkManager lemurs
 
 setup_bootloader
+
+send_status_message "CLEANUP: Unmounting all filesystems"
 umount -A -R /mnt # Unmount everything for safety
-printf "\n\n\n==> Installation finished, you can now reboot.\n"
+
+send_status_message "Installation finished. Reboot now."
