@@ -6,6 +6,27 @@ ROOT_PASSWORD=""
 USERNAME=""
 USER_PASSWORD=""
 
+install_deps() {
+  echo "You will need commands like mkfs.ext4, sgisk and pacstrap."
+  printf "Try to install them with pacman (if you are on arch linux)? [Y/n] "
+  read CONFIRMATION
+  case "$CONFIRMATION" in
+  "n" | "N")
+    echo "Operation canceled."
+    return
+    ;;
+  "" | "y" | "Y")
+    echo "Installing dependencies"
+    sudo pacman -S --needed --noconfirm dosfstools gptfdisk arch-install-scripts
+    echo ""
+    ;;
+  *)
+    echo "Invalid input. Defaulting to 'No'."
+    exit 0
+    ;;
+  esac
+}
+
 send_status_message() {
   term_width=$(tput cols 2>/dev/null || echo 80)
   msg="$1"
@@ -194,6 +215,10 @@ setup_bootloader() {
 }
 
 # >------ Main execution flow ------<
+
+# Install dependencies on the host
+install_deps
+echo ""
 
 # Ask for hostname, username, user and root passwords
 get_config_inputs
